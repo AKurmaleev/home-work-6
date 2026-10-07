@@ -1,0 +1,15 @@
+[package]
+name = "synchronization_thread_pool"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+loom = ["dep:loom"]
+
+[dependencies]
+loom = { version = "0.7", optional = true }
+
+[[test]]
+name = "loom_thread_pool"
+path = "tests/loom_thread_pool.rs"
+required-features = ["loom"]
