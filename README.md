@@ -1,17 +1,17 @@
-# ДЗ 6 — Thread Pool на Mutex и Condvar
+# Homework 6 — Thread Pool with Mutex and Condvar
 
-Решение задания по синхронизации потоков. Публичный API и имя пакета из шаблона сохранены: `ThreadPool::new`, `execute`, `shutdown`, `Task = fn(i64)`.
+Solution to the thread synchronization assignment. The public API and package name from the template are preserved: `ThreadPool::new`, `execute`, `shutdown`, `Task = fn(i64)`.
 
-## Навигация для проверяющего
+## Reviewer navigation
 
-- [src/lib.rs](src/lib.rs) — реализация пула.
-- [REPORT.md](REPORT.md) — инварианты, завершение и результаты проверки.
-- [tests/thread_pool.rs](tests/thread_pool.rs) — 9 исходных тестов; при включённом Loom отключены, поскольку используют обычные потоки вне модельного окружения.
-- [tests/lifecycle.rs](tests/lifecycle.rs) — 3 дополнительные проверки параллельности, FIFO и паники работника.
-- [tests/loom_thread_pool.rs](tests/loom_thread_pool.rs) — модельные проверки вариантов переключения потоков.
-- [ASSIGNMENT.md](ASSIGNMENT.md) — исходное условие.
+- [src/lib.rs](src/lib.rs) — pool implementation.
+- [REPORT.md](REPORT.md) — invariants, shutdown, and verification results.
+- [tests/thread_pool.rs](tests/thread_pool.rs) — 9 original tests; disabled when Loom is enabled because they use regular threads outside the model environment.
+- [tests/lifecycle.rs](tests/lifecycle.rs) — 3 additional checks for concurrency, FIFO, and worker panics.
+- [tests/loom_thread_pool.rs](tests/loom_thread_pool.rs) — model checks of thread interleavings.
+- [ASSIGNMENT.md](ASSIGNMENT.md) — original assignment.
 
-## Проверка
+## Verification
 
 ```sh
 cargo fmt --all --check
@@ -20,10 +20,10 @@ cargo test
 cargo test --features loom --test loom_thread_pool --release
 ```
 
-Пакет — библиотека, `cargo run` не нужен. Feature `loom` предназначена только для модельных тестов, не для обычного использования библиотеки. Первое выполнение Loom может загрузить зависимости из `Cargo.lock`.
+The package is a library; `cargo run` is not needed. The `loom` feature is intended only for model tests, not for normal library use. The first Loom run may download dependencies from `Cargo.lock`.
 
-## Что реализовано
+## Implementation
 
-Работники разделяют `Arc<Shared>`. Очередь `VecDeque<i64>` и флаг остановки находятся под одним `Mutex`; пустая очередь вызывает сон через `Condvar`, а не busy waiting. Задача вызывается после освобождения guard. `shutdown(self)` будит всех, позволяет разобрать оставшуюся очередь и делает `join` каждого работника.
+Workers share an `Arc<Shared>`. The `VecDeque<i64>` queue and shutdown flag are protected by the same `Mutex`; an empty queue causes workers to sleep on a `Condvar` rather than busy-wait. The task is called after the guard is released. `shutdown(self)` wakes everyone, allows the remaining queue to drain, and joins each worker.
 
-Очередь FIFO определяет порядок извлечения, но несколько работников не гарантируют порядок начала или завершения callback. Учебный API рассчитан на конечную нагрузку: очередь не ограничена, timeout/cancellation нет, для завершения требуется явный `shutdown`. Гарантия обработки всей принятой работы предполагает, что задачи завершаются без паники. При панике shutdown соединяет работников и сообщает панику; сохранность оставшейся работы не обещается.
+The FIFO queue determines dequeue order, but multiple workers do not guarantee callback start or completion order. This educational API is intended for a finite workload: the queue is unbounded, there is no timeout/cancellation, and an explicit `shutdown` is required to stop the pool. The guarantee that all accepted work is processed assumes that tasks finish without panicking. On a panic, shutdown joins the workers and reports the panic; preservation of the remaining work is not promised.

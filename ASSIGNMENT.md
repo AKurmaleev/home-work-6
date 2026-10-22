@@ -1,23 +1,23 @@
-# Домашнее задание: Thread Pool на Mutex и Condvar
+# Homework: Thread Pool with Mutex and Condvar
 
-## Цель
+## Goal
 
-Нужно реализовать простой thread pool:
+Implement a simple thread pool:
 
-- есть фиксированная функция-задача вида `fn task(num: i64)`;
-- пользователь кладет в пул числа через `ThreadPool::execute(num)`;
-- воркеры забирают числа из общей очереди и вызывают `task(num)`;
-- очередь задач должна быть защищена `Mutex`;
-- воркеры должны засыпать на `Condvar`, когда задач нет;
-- `shutdown(self)` должен дождаться завершения всех уже отправленных задач и аккуратно остановить воркеры.
+- there is a fixed task function of the form `fn task(num: i64)`;
+- the user submits numbers to the pool through `ThreadPool::execute(num)`;
+- workers take numbers from a shared queue and call `task(num)`;
+- the task queue must be protected by a `Mutex`;
+- workers must sleep on a `Condvar` when there are no tasks;
+- `shutdown(self)` must wait for all previously submitted tasks to finish and stop the workers gracefully.
 
-В этом проекте уже задан публичный API в `src/lib.rs` и набор интеграционных тестов в `tests/`.
+This project already provides a public API in `src/lib.rs` and a set of integration tests in `tests/`.
 
-## Что нужно реализовать
+## What to implement
 
-Откройте `src/lib.rs` и замените `todo!()` на рабочую реализацию.
+Open `src/lib.rs` and replace `todo!()` with a working implementation.
 
-Ожидаемый API:
+Expected API:
 
 ```rust
 pub type Task = fn(i64);
@@ -29,19 +29,19 @@ impl ThreadPool {
 }
 ```
 
-Поведение:
+Behavior:
 
-1. `ThreadPool::new(0, task)` должен паниковать.
-2. `ThreadPool::new(n, task)` создает `n` worker-потоков.
-3. `execute(num)` добавляет новую работу в очередь и будит хотя бы одного воркера.
-4. Если очередь пуста, воркер не крутится в цикле, а спит на `Condvar`.
-5. `shutdown(self)` запрещает дальнейшую работу, будит всех воркеров и делает `join` каждого worker-потока.
-6. Если к моменту `shutdown` в очереди еще есть задачи, они должны быть выполнены до выхода воркеров.
-7. Все отправленные задачи должны быть выполнены ровно один раз.
+1. `ThreadPool::new(0, task)` must panic.
+2. `ThreadPool::new(n, task)` creates `n` worker threads.
+3. `execute(num)` adds new work to the queue and wakes at least one worker.
+4. If the queue is empty, a worker sleeps on a `Condvar` instead of spinning in a loop.
+5. `shutdown(self)` prevents further work, wakes all workers, and joins each worker thread.
+6. If tasks remain in the queue when `shutdown` is called, they must be executed before the workers exit.
+7. All submitted tasks must be executed exactly once.
 
-## Рекомендуемая структура
+## Recommended structure
 
-Сделайте общее состояние, которое будет жить в `Arc`:
+Create shared state that will live in an `Arc`:
 
 ```rust
 struct Shared {
@@ -55,7 +55,7 @@ struct State {
 }
 ```
 
-Так как функция-задача фиксирована, в очереди достаточно хранить аргументы `i64`. Если хочется буквально сделать `Mutex<Vec<Task>>`, заведите отдельную структуру:
+Since the task function is fixed, storing `i64` arguments in the queue is sufficient. If you want to literally use `Mutex<Vec<Task>>`, introduce a separate struct:
 
 ```rust
 struct TaskItem {
@@ -63,9 +63,9 @@ struct TaskItem {
 }
 ```
 
-Тогда `State` будет хранить `queue: Vec<TaskItem>`, а worker будет доставать `TaskItem` и вызывать `task(item.num)`.
+Then `State` will store `queue: Vec<TaskItem>`, and a worker will take a `TaskItem` and call `task(item.num)`.
 
-Сам `ThreadPool` может хранить:
+`ThreadPool` itself can store:
 
 ```rust
 pub struct ThreadPool {
@@ -75,40 +75,40 @@ pub struct ThreadPool {
 }
 ```
 
-Можно хранить `task` внутри `Shared`, чтобы воркерам было проще получить к нему доступ. Выберите вариант, который вам понятнее.
+You can store `task` inside `Shared` to make it easier for workers to access. Choose whichever option is clearer to you.
 
-## Подсказки
+## Hints
 
-Импорты для обычной реализации:
+Imports for a regular implementation:
 
 ```rust
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 ```
 
-В этом проекте уже есть модуль `sync` в `src/lib.rs`. Если хотите, используйте его вместо прямых импортов:
+This project already has a `sync` module in `src/lib.rs`. You can use it instead of direct imports if you prefer:
 
 ```rust
 use crate::sync::{thread, Arc, Condvar, Mutex};
 ```
 
-Так решение будет проще прогонять через `loom`.
+This will make it easier to run the solution through `loom`.
 
-Создание потока:
+Creating a thread:
 
 ```rust
 let handle = thread::spawn(move || {
-    // код worker-а
+    // worker code
 });
 ```
 
-Ожидание потока:
+Waiting for a thread:
 
 ```rust
 handle.join().expect("worker panicked");
 ```
 
-Добавление задачи:
+Adding a task:
 
 ```rust
 let mut state = shared.state.lock().expect("mutex poisoned");
@@ -116,7 +116,7 @@ state.queue.push(num);
 shared.has_work.notify_one();
 ```
 
-Ожидание на `Condvar` почти всегда должно быть в цикле:
+Waiting on a `Condvar` should almost always happen in a loop:
 
 ```rust
 let mut state = shared.state.lock().expect("mutex poisoned");
@@ -129,9 +129,9 @@ while state.queue.is_empty() && !state.shutting_down {
 }
 ```
 
-Почему нужен `while`, а не `if`: поток может проснуться без новой задачи, или другой worker может забрать задачу раньше.
+Why `while` is needed instead of `if`: a thread may wake without a new task, or another worker may take the task first.
 
-Типичный worker-цикл:
+A typical worker loop:
 
 ```rust
 loop {
@@ -158,9 +158,9 @@ loop {
 }
 ```
 
-Важная деталь: задачу нужно выполнять после выхода из критической секции. Не держите mutex во время `task(num)`, иначе один долгий task заблокирует всю очередь.
+An important detail: the task must run after leaving the critical section. Do not hold the mutex during `task(num)`, otherwise one long-running task will block the entire queue.
 
-Для `shutdown`:
+For `shutdown`:
 
 ```rust
 {
@@ -174,62 +174,62 @@ for worker in workers {
 }
 ```
 
-`notify_all` нужен, потому что на момент завершения несколько воркеров могут спать на `Condvar`.
+`notify_all` is needed because several workers may be sleeping on the `Condvar` at shutdown.
 
-## Про порядок задач
+## Task order
 
-Если использовать `Vec<i64>` и `pop()`, задачи будут выполняться в порядке LIFO. В этом задании FIFO-порядок не требуется. Важно только, чтобы каждая задача была выполнена ровно один раз.
+Using `Vec<i64>` and `pop()` executes tasks in LIFO order. FIFO order is not required by this assignment. The only requirement is that each task be executed exactly once.
 
-Если хотите FIFO, можно использовать `VecDeque<i64>` из стандартной библиотеки:
+If you want FIFO, you can use `VecDeque<i64>` from the standard library:
 
 ```rust
 use std::collections::VecDeque;
 ```
 
-Но базовый вариант с `Vec<i64>` полностью подходит для задания.
+However, the basic version with `Vec<i64>` fully satisfies the assignment.
 
-## Как запускать
+## How to run
 
-Обычные тесты:
+Regular tests:
 
 ```bash
 cargo test
 ```
 
-Только интеграционные тесты thread pool:
+Only the thread pool integration tests:
 
 ```bash
 cargo test --test thread_pool
 ```
 
-Loom-тесты:
+Loom tests:
 
 ```bash
 cargo test --features loom --test loom_thread_pool
 ```
 
-Если loom найдет ошибку, он обычно покажет один конкретный interleaving, на котором код ломается или зависает. Сначала исправьте обычные тесты, потом запускайте loom.
+If loom finds an error, it usually shows a specific interleaving in which the code breaks or hangs. Get the regular tests passing first, then run loom.
 
-Запустить примерный проект как библиотеку нельзя, потому что это `lib`-crate. Для ручной проверки можно временно добавить `src/main.rs` или написать маленький тест в `tests/`.
+You cannot run the sample project directly because it is a `lib` crate. For manual verification, you can temporarily add `src/main.rs` or write a small test in `tests/`.
 
-Форматирование:
+Formatting:
 
 ```bash
 cargo fmt
 ```
 
-Проверка компиляции без запуска тестов:
+Checking compilation without running tests:
 
 ```bash
 cargo test --no-run
 ```
 
-## Что сдавать
+## What to submit
 
-Сдайте измененный `src/lib.rs`, в котором:
+Submit the modified `src/lib.rs` with:
 
-- нет `todo!()`;
-- нет busy waiting;
-- нет `unsafe`;
-- обычные тесты проходят;
-- loom-тесты проходят с `--features loom`.
+- no `todo!()`;
+- no busy waiting;
+- no `unsafe`;
+- passing regular tests;
+- passing loom tests with `--features loom`.

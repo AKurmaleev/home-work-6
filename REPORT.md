@@ -1,35 +1,35 @@
-# Краткий отчёт по ДЗ 6
+# Brief report on Homework 6
 
-## Реализация
+## Implementation
 
-В `src/lib.rs` вместо заглушек реализован фиксированный пул потоков. Каждая задача — аргумент `i64` для одной функции `fn(i64)`. Очередь FIFO (`VecDeque`) не требует сдвигать элементы при извлечении из начала. Импорты `Arc`, `Mutex`, `Condvar` и `thread` идут через заданный модуль `sync`, поэтому тот же алгоритм проверяется с обычными примитивами и заменами Loom.
+A fixed-size thread pool replaces the stubs in `src/lib.rs`. Each task is an `i64` argument for a single `fn(i64)` function. The FIFO queue (`VecDeque`) does not require shifting elements when removing from the front. `Arc`, `Mutex`, `Condvar`, and `thread` are imported through the provided `sync` module, so the same algorithm is checked with regular primitives and Loom replacements.
 
-## Инварианты
+## Invariants
 
-1. Очередь и `shutting_down` читаются и изменяются под одним мьютексом.
-2. Работник спит только пока `queue.is_empty() && !shutting_down`. `wait` атомарно освобождает guard при переходе к ожиданию и возвращает его после пробуждения. Условие перепроверяется в `while`: пробуждение не гарантирует наличие работы.
-3. Извлечение аргумента атомарно относительно других работников. Для нормально завершающихся задач один принятый аргумент вызывает один callback; одинаковые значения остаются отдельными задачами.
-4. Callback выполняется без guard очереди, иначе долгий обработчик блокировал бы производителей и всех остальных работников.
-5. После запроса остановки работник сначала разбирает доступную очередь. Пустая очередь вместе с флагом остановки означает выход. Ожидание `join` происходит без мьютекса очереди.
+1. The queue and `shutting_down` are read and modified under the same mutex.
+2. A worker sleeps only while `queue.is_empty() && !shutting_down`. `wait` atomically releases the guard when entering the wait and returns it after waking. The condition is rechecked in a `while` loop: waking does not guarantee that work is available.
+3. Dequeuing an argument is atomic with respect to other workers. For tasks that finish normally, one accepted argument causes one callback; identical values remain separate tasks.
+4. The callback runs without the queue guard; otherwise a long-running handler would block producers and all other workers.
+5. After a shutdown request, a worker first drains the available queue. An empty queue together with the shutdown flag means exit. Waiting in `join` happens without the queue mutex.
 
-`execute(&self)` допускает несколько производителей. `shutdown(self)` потребляет пул: безопасный Rust не позволяет вызвать его, пока другой поток продолжает пользоваться заимствованным `&ThreadPool`. Остановка пробуждает всех через `notify_all`; один `notify_one` оставил бы остальных спать.
+`execute(&self)` supports multiple producers. `shutdown(self)` consumes the pool: safe Rust prevents calling it while another thread is still using a borrowed `&ThreadPool`. Shutdown wakes everyone through `notify_all`; a single `notify_one` would leave the others asleep.
 
-## Проверка
+## Verification
 
-Локально: Windows, Rust/Cargo 1.95.0. До реализации 8 исходных тестов падали на `todo!`; тест нулевого числа работников проходил лишь из-за любой паники заглушки.
+Local environment: Windows, Rust/Cargo 1.95.0. Before implementation, 8 original tests failed at `todo!`; the zero-worker test passed only because any panic from the stub satisfied it.
 
-После реализации `cargo fmt --all --check`, `cargo check --all-targets`, Clippy с `-D warnings` (в обычном режиме и с `--all-features`), 12 обычных тестов и 6 Loom-тестов прошли. Обычные и модельные тесты проверены в debug и release.
+After implementation, `cargo fmt --all --check`, `cargo check --all-targets`, Clippy with `-D warnings` (in normal mode and with `--all-features`), 12 regular tests, and 6 Loom tests passed. Regular and model tests were checked in debug and release.
 
-Покрытие:
+Coverage:
 
-- 9 исходных сценариев: пустой/работающий пул, пробуждения, drain, конкурентные производители, выполнение ровно один раз и отрицательные аргументы;
-- 3 дополнительных сценария: два одновременно работающих callback, повторяющиеся/крайние `i64`, обработка паники;
-- Loom: пробуждение одного/двух работников, отправка работы, завершение производителя, точное выполнение аргументов и конкурирующие работники.
+- 9 original scenarios: empty/working pool, wakeups, draining, concurrent producers, exactly-once execution, and negative arguments;
+- 3 additional scenarios: two concurrently running callbacks, duplicate/extreme `i64` values, and panic handling;
+- Loom: waking one/two workers, submitting work, producer completion, exact execution of arguments, and competing workers.
 
-Модель с двумя работниками и двумя задачами ограничена двумя вытесняющими переключениями (`preemption_bound = Some(2)`); остальные модели используют стандартный обход Loom. Модельная проверка покрывает заданные маленькие сценарии, а не все возможные нагрузки или отказы ОС.
+The model with two workers and two tasks is limited to two preemptive context switches (`preemption_bound = Some(2)`); the other models use Loom's default exploration. Model checking covers the specified small scenarios, not all possible workloads or OS failures.
 
-Команды воспроизведения — в [README.md](README.md). В тестах нет утверждений о скорости; статистический бенчмарк в этом ДЗ не проводился.
+Reproduction commands are in [README.md](README.md). The tests make no speed assertions; no statistical benchmark was conducted for this homework.
 
-## Ограничения
+## Limitations
 
-Это учебный пул, не production executor. Неограниченная очередь требует конечной нагрузки; зависший callback задерживает shutdown. Задачи не перезапускаются после паники. Явный `shutdown` обязателен: `Drop` не реализован. Ошибка ОС при создании потоков может вызвать панику конструктора; очистка частично созданного пула не является гарантией этого API.
+This is an educational pool, not a production executor. The unbounded queue requires a finite workload; a stuck callback delays shutdown. Tasks are not restarted after a panic. An explicit `shutdown` is required: `Drop` is not implemented. An OS error during thread creation may cause the constructor to panic; cleanup of a partially created pool is not guaranteed by this API.
