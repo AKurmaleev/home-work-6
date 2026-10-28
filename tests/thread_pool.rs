@@ -10,7 +10,7 @@ use synchronization_thread_pool::ThreadPool;
 static EVENTS: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 
 fn record_task(num: i64) {
-    let mut events = EVENTS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut events = EVENTS.lock().unwrap();
     events.push(num);
 }
 
@@ -20,7 +20,7 @@ fn slow_record_task(num: i64) {
 }
 
 fn values_in(range: Range<i64>) -> Vec<i64> {
-    let events = EVENTS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let events = EVENTS.lock().unwrap();
     events
         .iter()
         .copied()
@@ -49,15 +49,19 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
 fn assert_shutdown_finishes(pool: ThreadPool) {
     let (tx, rx) = std::sync::mpsc::channel();
 
-    thread::spawn(move || {
+    let shutdown = thread::spawn(move || {
         pool.shutdown();
-        tx.send(()).ok();
+        tx.send(())
+            .expect("shutdown test receiver must remain connected");
     });
 
     assert!(
         rx.recv_timeout(Duration::from_secs(2)).is_ok(),
         "shutdown did not finish; workers may be stuck on the Condvar"
     );
+    shutdown
+        .join()
+        .expect("shutdown test thread must not panic");
 }
 
 #[test]

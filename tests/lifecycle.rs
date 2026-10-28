@@ -1,5 +1,7 @@
 #![cfg(not(feature = "loom"))]
 
+use std::any::Any;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, mpsc};
 use std::time::Duration;
 
@@ -74,11 +76,60 @@ fn shutdown_reports_worker_panic_after_joining_other_workers() {
     pool.execute(1);
     let (tx, rx) = mpsc::channel();
     let shutdown = std::thread::spawn(move || {
-        let panicked =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pool.shutdown())).is_err();
-        tx.send(panicked).unwrap();
+        // The pool is consumed and never reused after this unwind boundary.
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pool.shutdown()))
+            .expect_err("one worker must have panicked");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"intentional task failure"),
+            "a single worker panic must retain its original payload"
+        );
+        tx.send(()).unwrap();
     });
-    assert!(rx.recv_timeout(Duration::from_secs(3)).unwrap());
+    rx.recv_timeout(Duration::from_secs(3)).unwrap();
     shutdown.join().unwrap();
     assert!(*SECOND_DONE.lock().unwrap());
+}
+
+static PAYLOAD_DROPPED_WHILE_UNWINDING: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug)]
+struct PanicPayload(i64);
+
+impl Drop for PanicPayload {
+    fn drop(&mut self) {
+        // Observation only: a real panicking destructor here would abort the
+        // process if shutdown dropped this payload during another unwind.
+        PAYLOAD_DROPPED_WHILE_UNWINDING.fetch_or(std::thread::panicking(), Ordering::Relaxed);
+    }
+}
+
+fn panic_with_payload(num: i64) {
+    std::panic::panic_any(PanicPayload(num));
+}
+
+#[test]
+fn shutdown_retains_all_worker_panics_without_dropping_payloads_while_unwinding() {
+    let pool = ThreadPool::new(2, panic_with_payload);
+    pool.execute(1);
+    pool.execute(2);
+    // Shutdown consumes the pool; captured handles/state are not reused after
+    // unwinding, and both callback failures belong to this runtime boundary.
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pool.shutdown()))
+        .expect_err("both workers must have panicked");
+    assert!(
+        !PAYLOAD_DROPPED_WHILE_UNWINDING.load(Ordering::Relaxed),
+        "shutdown must not destroy secondary panic payloads during unwinding"
+    );
+    let failures = failure.downcast::<Vec<Box<dyn Any + Send>>>().unwrap();
+    let mut arguments: Vec<_> = failures
+        .iter()
+        .map(|payload| payload.downcast_ref::<PanicPayload>().unwrap().0)
+        .collect();
+    arguments.sort_unstable();
+    assert_eq!(
+        arguments,
+        [1, 2],
+        "every worker failure must reach the caller"
+    );
 }
